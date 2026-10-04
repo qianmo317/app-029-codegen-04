@@ -378,6 +378,101 @@ export async function runAcceptance(preset: Preset = defaultPreset): Promise<Acc
     })
   }
 
+  // ---------- 11. 供货商价目批量录入：归一/校验/取舍/生效取价/整批退回/试算 ----------
+  {
+    const {
+      buildCatalog,
+      commitRows,
+      committableRows,
+      effectivePreset,
+      emptyBook,
+      normalizeUnit,
+      parseDate,
+      parsePastedTable,
+      parsePrice,
+      revertBatch,
+      simulateImpacts,
+      toHalfWidth
+    } = await import('./pricebook')
+    const ev: string[] = []
+    let pass = true
+    const cat = buildCatalog(preset)
+
+    // 归一
+    pass &&= toHalfWidth('ＬＥＤ３８．５') === 'LED38.5'
+    pass &&= normalizeUnit('PCS') === '只' && normalizeUnit('m2') === '㎡'
+    pass &&= parsePrice('０．９５').cents === 95 && parsePrice('0').cents === null && parsePrice('-5').cents === null
+    pass &&= parseDate('2026.13.15') === null && parseDate('2026年10月1日') === '2026-10-01'
+    ev.push('归一：全角「ＬＥＤ３８．５」→「LED38.5」；单位 PCS→只、m2→㎡；全角价 ０．９５→95 分')
+
+    // 整表校验（含缺列、零/负价、非法日期、同日重复）
+    const table =
+      '材料名称\t规格\t单位\t单价\t生效日期\n' +
+      '亚克力专用结构胶 300ml\t\t支\t42\t2026-10-15\n' +
+      '不锈钢挂件/自攻螺丝（每字 4 套）\t\t套\t0\t2026-10-15\n' +
+      '电源线 RVV 2×1.0mm²\t\t米\t3.5\t2026.13.15\n' +
+      '面板切割/雕刻（含异形修边）\t\t㎡\t-5\t2026-10-15\n' +
+      '亚克力专用结构胶300ml\t\t支\t45\t2026-10-15'
+    const pReject = parsePastedTable(table, 'reject', cat)
+    const lineErr = (n: number) => pReject.rows.find((r) => r.lineNo === n)?.errors ?? []
+    pass &&= pReject.headerLine === 1 && pReject.rows.length === 5
+    pass &&= lineErr(2).some((e) => e.includes('重复')) // 与第 6 行（也是胶 10-15）重复
+    pass &&= lineErr(3).some((e) => e.includes('0'))
+    pass &&= lineErr(4).some((e) => e.includes('日期'))
+    pass &&= lineErr(5).some((e) => e.includes('负'))
+    pass &&= lineErr(6).some((e) => e.includes('重复'))
+    pass &&= committableRows(pReject.rows).length === 0
+    ev.push(
+      'reject 取舍：第 2/6 行同材料同日重复双双拦下；第 3 行零价、第 4 行 13 月非法日期、第 5 行负价均按行号拦下，整批不可提交'
+    )
+
+    // last 取舍：留最后一条 45
+    const pLast = parsePastedTable(table, 'last', cat)
+    const lastCommit = committableRows(pLast.rows)
+    pass &&= lastCommit.length === 1 && lastCommit[0].lineNo === 6 && lastCommit[0].priceCents === 4500
+    pass &&= pLast.rows.find((r) => r.lineNo === 2)?.dupTag === 'dropped'
+    ev.push('last 取舍：第 2 行（42 元）标记 dropped，仅第 6 行（45 元）提交')
+
+    // 缺列整表拦下
+    const noDate = parsePastedTable('名称\t规格\t单位\t单价\n胶\t\t支\t42', 'reject', cat)
+    pass &&= noDate.tableErrors.length > 0 && noDate.tableErrors[0].includes('生效日期')
+
+    // 生效取价 + 退回恢复（用一张只含合法行的表）
+    let book = emptyBook()
+    const clean = '名称\t规格\t单位\t单价\t生效日期\n亚克力专用结构胶 300ml\t\t支\t38\t2026-01-01'
+    book = commitRows(book, committableRows(parsePastedTable(clean, 'reject', cat).rows), { supplier: '老价' }).book
+    const r2 = commitRows(book, lastCommit, { supplier: '10月价' })
+    book = r2.book
+    const before = effectivePreset(preset, book, '2026-10-01').consumables.find((c) => c.id === 'glue')!.unitPriceCents
+    const after = effectivePreset(preset, book, '2026-10-15').consumables.find((c) => c.id === 'glue')!.unitPriceCents
+    pass &&= before === 3800 && after === 4500
+    ev.push(`生效取价：10-01 取 38 元、10-15 当天起取 45 元（effectiveDate≤取价日取最近）`)
+    const rv = revertBatch(book, r2.batch.id)
+    pass &&= !!rv && effectivePreset(preset, rv!.book, '2026-10-15').consumables.find((c) => c.id === 'glue')!.unitPriceCents === 3800
+    ev.push('整批退回 10 月价批次后，胶价自动恢复 38 元（旧条目不删、批次标 reverted）')
+
+    // 试算：真实项目，胶 45→50 的单据差额 = 数量×500 分
+    const tp = makeProject('acc11', '广告招牌制作', 300)
+    const tlay = computeLayout(tp.layout, { autoSize: true })
+    const trial = parsePastedTable('名称\t规格\t单位\t单价\t生效日期\n亚克力专用结构胶 300ml\t\t支\t50\t2026-10-15', 'reject', cat)
+    const impacts = simulateImpacts(preset, book, committableRows(trial.rows), '2026-10-15', [{ project: tp, layout: tlay }])
+    const im = impacts[0]
+    const glueLine = im?.lines.find((l) => l.spec.includes('结构胶'))
+    pass &&= !!im && !!glueLine && glueLine.deltaCents === glueLine.qty * 500
+    pass &&= !!im && im.deltaCents === im.lines.reduce((s, l) => s + l.deltaCents, 0)
+    ev.push(
+      `试算：胶 45→50 元，单据「${im?.projectName}」合计 ${im?.oldTotalCents}→${im?.newTotalCents} 分（差 ${im?.deltaCents} 分 = 明细差额之和，按绝对值排序置首）`
+    )
+
+    checks.push({
+      id: 'A11',
+      title: '价目批量录入：列识别/归一/逐行校验/重复取舍/生效取价/整批退回/试算差额',
+      pass,
+      detail: pass ? '全部通过' : '存在未通过项',
+      evidence: ev
+    })
+  }
+
   const blockScan = await runBlockCount()
   checks.push({
     id: 'A10',

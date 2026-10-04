@@ -3,10 +3,11 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ensureFont, findFont, listFonts } from '../logic/fontLoader'
 import { computeLayout, mountingLabel, textToItems } from '../logic/layout'
-import { buildBom } from '../logic/materials'
+import { buildBom, type BomResult } from '../logic/materials'
 import { compareMaterials } from '../logic/materials'
 import { bomGroupLabel } from '../logic/quote'
-import { createProject, deleteProject, duplicateProject, listProjects, loadPreset, loadPrefs, saveProject } from '../logic/store'
+import { effectivePreset, pricingSummary, todayIso } from '../logic/pricebook'
+import { createProject, deleteProject, duplicateProject, listProjects, loadPreset, loadPrefs, loadPriceBook, saveProject } from '../logic/store'
 import type { Align, Mounting, Project } from '../logic/types'
 import { yuan } from '../logic/materials'
 
@@ -123,9 +124,10 @@ const selectedProjects = computed(() => {
 
 const batchRows = computed(() => {
   void batchTick.value
+  const effPreset = effectivePreset(preset.value, loadPriceBook(), todayIso())
   return selectedProjects.value.map((p) => {
     const lay = computeLayout(p.layout)
-    const bom = buildBom(p, lay, preset.value)
+    const bom = buildBom(p, lay, effPreset)
     return { project: p, layout: lay, bom }
   })
 })
@@ -141,8 +143,14 @@ const batchTotal = computed(() => {
   }
 })
 
-function applyUnified(): void {
-  const unify = {
+const pricingNote = computed(() => pricingSummary(loadPriceBook(), todayIso()))
+
+function firstCompare(p: Project, lay: ReturnType<typeof computeLayout>, bom: BomResult): { name: string; totalCents: number } {
+  const effPreset = effectivePreset(preset.value, loadPriceBook(), todayIso())
+  return compareMaterials(p, lay, effPreset, bom)[0]
+}
+
+function applyUnified(): void {  const unify = {
     fontId: draft.value.fontId,
     weight: draft.value.weight,
     baseSizeMm: draft.value.baseSizeMm,
@@ -295,6 +303,7 @@ function applyUnified(): void {
         <h2>导视牌批量：一组牌子统一排布与材料汇总</h2>
         <span class="hint">勾选上方项目（{{ selected.length }} 个已选）</span>
       </header>
+      <p class="muted" style="margin: 0 0 10px">{{ pricingNote }}</p>
       <div class="row" style="margin-bottom: 10px">
         <button :disabled="selected.length === 0" @click="applyUnified">
           把左侧「字体 / 字重 / 字号 / 对齐 / 字距比例」统一应用到所选项
@@ -351,8 +360,8 @@ function applyUnified(): void {
             }}、{{ bomGroupLabel('labor') }}。
           </li>
           <li v-for="r in batchRows" :key="`c${r.project.id}`">
-            {{ r.project.name }}：{{ compareMaterials(r.project, r.layout, preset, r.bom)[0].name }} 方案 ¥{{
-              yuan(compareMaterials(r.project, r.layout, preset, r.bom)[0].totalCents)
+            {{ r.project.name }}：{{ firstCompare(r.project, r.layout, r.bom).name }} 方案 ¥{{
+              yuan(firstCompare(r.project, r.layout, r.bom).totalCents)
             }}
           </li>
         </ul>

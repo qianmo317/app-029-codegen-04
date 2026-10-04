@@ -5,7 +5,8 @@ import { findFont } from '../logic/fontLoader'
 import { buildQuoteDoc, exportQuoteXls, exportProcessCardCsv } from '../logic/quote'
 import { assertBomSum, buildBom, compareMaterials, yuan } from '../logic/materials'
 import { alignLabel, mountingLabel } from '../logic/layout'
-import { getProject } from '../logic/store'
+import { getProject, loadPriceBook } from '../logic/store'
+import { pricingSummary, todayIso } from '../logic/pricebook'
 import { useSession } from '../logic/useSession'
 import type { Project } from '../logic/types'
 
@@ -29,8 +30,9 @@ const fontLabel = computed(() => {
   return f ? `${f.label}（${f.family}）` : ''
 })
 const doc = computed(() =>
-  project.value && layout.value && bom.value ? buildQuoteDoc(project.value, layout.value, bom.value, fontLabel.value) : null
+  project.value && layout.value && bom.value ? buildQuoteDoc(project.value, layout.value, bom.value, fontLabel.value, pricingNote.value) : null
 )
+const pricingNote = computed(() => pricingSummary(loadPriceBook(), todayIso()))
 const sum = computed(() => (bom.value ? assertBomSum(bom.value) : null))
 const compare = computed(() =>
   project.value && layout.value && bom.value ? compareMaterials(project.value, layout.value, preset.value, bom.value) : []
@@ -43,7 +45,7 @@ function printNow(): void {
 
 function toExcel(): void {
   if (project.value && layout.value && bom.value) {
-    exportQuoteXls(project.value, layout.value, bom.value, fontLabel.value, compare.value)
+    exportQuoteXls(project.value, layout.value, bom.value, fontLabel.value, compare.value, pricingNote.value)
   }
 }
 

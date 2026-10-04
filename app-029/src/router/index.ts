@@ -6,6 +6,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/light/:id', name: 'light', component: () => import('../views/LightView.vue') },
   { path: '/materials/:id', name: 'materials', component: () => import('../views/MaterialsView.vue') },
   { path: '/quote/:id', name: 'quote', component: () => import('../views/QuoteView.vue') },
+  { path: '/pricing', name: 'pricing', component: () => import('../views/PriceImportView.vue') },
   { path: '/fonts', name: 'fonts', component: () => import('../views/FontsView.vue') },
   { path: '/presets', name: 'presets', component: () => import('../views/PresetsView.vue') },
   { path: '/:pathMatch(.*)*', redirect: '/' }
