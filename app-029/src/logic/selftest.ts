@@ -9,6 +9,7 @@ import { clearGeometryCache, ensureFont, findFont, getGlyphGeom } from './fontLo
 import { computeLayout, defaultProject, textToItems, type LayoutResult } from './layout'
 import { assertBomSum, buildBom, compareMaterials, defaultPreset, type Preset } from './materials'
 import { nestPieces, type Piece } from './nesting'
+import { applyToPreset, parsePriceTable, presetTargets, validateRows, type PriceEntry } from './priceBook'
 import { runBlockCount, type BlockCountResult } from './testRunner'
 import type { LayoutDef, Project } from './types'
 import type { Ring } from './geometry'
@@ -386,6 +387,75 @@ export async function runAcceptance(preset: Preset = defaultPreset): Promise<Acc
     detail: blockScan.every((b) => b.same) ? '两套算法结果完全一致' : '存在不一致',
     evidence: blockScan.map((b) => `${b.char}：扫描线并查集=${b.scanline}，光栅洪泛=${b.raster}${b.same ? '' : ' ✗'}`)
   })
+
+  // ---------- 11. 供货商价目批量录入：列识别、归一化、校验、取舍与按日取价 ----------
+  {
+    const sample = [
+      '材料名称\t规格\t单位\t单价\t生效日期',
+      '亚克力板\t1220×2440×3mm\t张\t288\t2026-10-01',
+      '亚克力板\t1220×2440×3MM\t张\t300.5\t2026/10/20',
+      'ＬＥＤ　模组\t2835 双灯\t只\t１．４５\t2026年10月1日',
+      'LED 模组\t2835双灯\t只\t1.45\t2026-10-01',
+      '结构胶\t300ml\t支\t0\t2026-10-01',
+      '密封胶\t300ml\t支\t-5\t2026-10-01',
+      '玻璃胶\t300ml\t支\t12\t2026-13-01'
+    ].join('\n')
+    const table = parsePriceTable(sample)
+    validateRows(table, presetTargets(preset), { dupPolicy: 'last', defaultDate: '2026-10-01' })
+    const mapOk = table.mapping.join(',') === 'name,spec,unit,price,date'
+    const rowAt = (no: number) => table.rows.find((r) => r.lineNo === no)
+    const led1 = rowAt(4)
+    const led2 = rowAt(5)
+    const normOk = !!led1 && !!led2 && led1.key === led2.key && led1.priceCents === 145 && led1.date === '2026-10-01'
+    const dupOk = !!led1 && !!led2 && led1.dupOf === 5 && led2.dupOf === null
+    const zero = rowAt(6)
+    const neg = rowAt(7)
+    const badDate = rowAt(8)
+    const errOk =
+      !!zero && zero.issues.some((s) => s.includes('为零或为负')) &&
+      !!neg && neg.issues.some((s) => s.includes('为零或为负')) &&
+      !!badDate && badDate.issues.some((s) => s.includes('不合法'))
+    const sheet1 = rowAt(2)
+    const matchOk = sheet1?.target?.section === 'sheet' && sheet1.target.id === 'acr-1220x2440x3'
+    const mk = (price: number, date: string, createdAt: number): PriceEntry => ({
+      id: `t${createdAt}`,
+      batchId: 't',
+      name: '亚克力板',
+      spec: '1220×2440×3mm',
+      unit: '张',
+      key: '',
+      unitPriceCents: price,
+      effectiveDate: date,
+      createdAt,
+      target: { section: 'sheet', id: 'acr-1220x2440x3', label: '亚克力板 1220×2440×3mm' }
+    })
+    const entries = [mk(28800, '2026-10-01', 1), mk(30050, '2026-10-20', 2)]
+    const p1010 = applyToPreset(preset, entries, '2026-10-10').preset.acrylicSheets[0].priceCents
+    const p1025 = applyToPreset(preset, entries, '2026-10-25').preset.acrylicSheets[0].priceCents
+    const versionOk = p1010 === 28800 && p1025 === 30050
+    const proj = makeProject('acc11', '广告招牌制作', 300)
+    const lay = computeLayout(proj.layout, { autoSize: true })
+    const b0 = buildBom(proj, lay, preset, { acknowledgeThinStroke: true })
+    const b1 = buildBom(proj, lay, applyToPreset(preset, entries, '2026-10-25').preset, { acknowledgeThinStroke: true })
+    const diff = b1.totalCents - b0.totalCents
+    const diffOk = diff === b0.nesting.sheetCount * (30050 - 28000)
+    const pass = mapOk && normOk && dupOk && errOk && matchOk && versionOk && diffOk
+    checks.push({
+      id: 'A11',
+      title: '价目批量录入：列识别、全半角/空格/单位归一、行级校验（零负价/非法日期）、重复取舍、按生效日期取价与试算差价',
+      pass,
+      detail: pass ? '通过' : '存在未通过项',
+      evidence: [
+        `列识别：${table.mapping.join('/')}（期望 name/spec/unit/price/date）`,
+        `归一化：「ＬＥＤ　模组 2835 双灯 １．４５ 2026年10月1日」→ 键「${led1?.key ?? '-'}」，单价 ${led1?.priceCents ?? '-'} 分`,
+        `重复取舍（留最后一条）：第 4 行 dupOf=${led1?.dupOf ?? '-'}（被第 5 行覆盖），第 5 行保留`,
+        `行级校验：第 6 行「${zero?.issues[0] ?? '-'}」、第 7 行「${neg?.issues[0] ?? '-'}」、第 8 行「${badDate?.issues[0] ?? '-'}」均被拦下`,
+        `关联店内材料：第 2 行 → ${sheet1?.target?.label ?? '未关联'}`,
+        `按日取价：2026-10-10 取 ${p1010} 分，2026-10-25 取 ${p1025} 分（同日多条以靠后录入为准）`,
+        `试算差价：板数 ${b0.nesting.sheetCount} × 差价 ${30050 - 28000} 分 = ${b0.nesting.sheetCount * (30050 - 28000)} 分，整单重算差额 ${diff} 分`
+      ]
+    })
+  }
 
   const elapsedMs = performance.now() - t0
   return { checks, allPass: checks.every((c) => c.pass), elapsedMs, blockScan }

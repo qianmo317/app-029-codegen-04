@@ -5,12 +5,14 @@
 
 import materialsData from '../data/materials.json'
 import type { Preset } from './materials'
+import type { PriceBookData } from './priceBook'
 import { defaultProject } from './layout'
 import type { Project } from './types'
 
 const KEY_PROJECTS = 'app029.projects.v1'
 const KEY_PRESET = 'app029.preset.v1'
 const KEY_PREFS = 'app029.prefs.v1'
+const KEY_PRICES = 'app029.pricebook.v1'
 
 export interface Prefs {
   defaultFontId: string
@@ -127,4 +129,16 @@ export function savePrefs(p: Partial<Prefs>): Prefs {
   const next = { ...loadPrefs(), ...p }
   writeJson(KEY_PREFS, next)
   return next
+}
+
+/** 供货商价目库：批次写入的价目条目 + 改价记录 */
+export function loadPriceBook(): PriceBookData {
+  const d = readJson<PriceBookData>(KEY_PRICES, { entries: [], batches: [] })
+  if (!Array.isArray(d.entries)) d.entries = []
+  if (!Array.isArray(d.batches)) d.batches = []
+  return d
+}
+
+export function savePriceBook(d: PriceBookData): void {
+  writeJson(KEY_PRICES, d)
 }

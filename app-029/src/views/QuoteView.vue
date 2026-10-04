@@ -5,7 +5,8 @@ import { findFont } from '../logic/fontLoader'
 import { buildQuoteDoc, exportQuoteXls, exportProcessCardCsv } from '../logic/quote'
 import { assertBomSum, buildBom, compareMaterials, yuan } from '../logic/materials'
 import { alignLabel, mountingLabel } from '../logic/layout'
-import { getProject } from '../logic/store'
+import { applyToPreset, todayStr } from '../logic/priceBook'
+import { getProject, loadPriceBook } from '../logic/store'
 import { useSession } from '../logic/useSession'
 import type { Project } from '../logic/types'
 
@@ -14,13 +15,22 @@ const loaded = ref<Project | null>(getProject(String(route.params.id)))
 const session = useSession(loaded)
 const project = computed(() => loaded.value)
 const layout = session.layout
-const preset = session.preset
 const ack = ref(false)
 const mode = ref<'quote' | 'card'>('quote')
 const printed = ref(false)
 
+// 材料取价：按「当天生效」的价目版本覆盖预设单价（价目库来自供货商批量录入）
+const priceInfo = computed(() => applyToPreset(session.preset.value, loadPriceBook().entries, todayStr()))
+const effPreset = computed(() => priceInfo.value.preset)
+const priceNote = computed(() => {
+  const applied = priceInfo.value.applied
+  const total = loadPriceBook().entries.length
+  const maxEff = applied.length ? applied.map((a) => a.effectiveDate).sort()[applied.length - 1] : ''
+  return `材料取价：按 ${todayStr()} 当天生效价目（价目库累计 ${total} 条，本单应用 ${applied.length} 条${applied.length ? `，最近生效 ${maxEff}` : ''}）`
+})
+
 const bom = computed(() =>
-  project.value && layout.value ? buildBom(project.value, layout.value, preset.value, { acknowledgeThinStroke: ack.value }) : null
+  project.value && layout.value ? buildBom(project.value, layout.value, effPreset.value, { acknowledgeThinStroke: ack.value }) : null
 )
 const fontLabel = computed(() => {
   const p = project.value
@@ -29,11 +39,11 @@ const fontLabel = computed(() => {
   return f ? `${f.label}（${f.family}）` : ''
 })
 const doc = computed(() =>
-  project.value && layout.value && bom.value ? buildQuoteDoc(project.value, layout.value, bom.value, fontLabel.value) : null
+  project.value && layout.value && bom.value ? buildQuoteDoc(project.value, layout.value, bom.value, fontLabel.value, priceNote.value) : null
 )
 const sum = computed(() => (bom.value ? assertBomSum(bom.value) : null))
 const compare = computed(() =>
-  project.value && layout.value && bom.value ? compareMaterials(project.value, layout.value, preset.value, bom.value) : []
+  project.value && layout.value && bom.value ? compareMaterials(project.value, layout.value, effPreset.value, bom.value) : []
 )
 
 function printNow(): void {
@@ -43,7 +53,7 @@ function printNow(): void {
 
 function toExcel(): void {
   if (project.value && layout.value && bom.value) {
-    exportQuoteXls(project.value, layout.value, bom.value, fontLabel.value, compare.value)
+    exportQuoteXls(project.value, layout.value, bom.value, fontLabel.value, compare.value, priceNote.value)
   }
 }
 

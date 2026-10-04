@@ -5,8 +5,9 @@ import SheetDiagram from '../components/SheetDiagram.vue'
 import { findFont } from '../logic/fontLoader'
 import { alignLabel } from '../logic/layout'
 import { assertBomSum, buildBom, compareMaterials, yuan } from '../logic/materials'
+import { applyToPreset, todayStr } from '../logic/priceBook'
 import { bomGroupLabel, exportProcessCardCsv } from '../logic/quote'
-import { getProject } from '../logic/store'
+import { getProject, loadPriceBook } from '../logic/store'
 import { useSession } from '../logic/useSession'
 import type { Project } from '../logic/types'
 
@@ -18,10 +19,14 @@ const layout = session.layout
 const preset = session.preset
 const ack = ref(false)
 
-const bom = computed(() => (project.value && layout.value ? buildBom(project.value, layout.value, preset.value, { acknowledgeThinStroke: ack.value }) : null))
+// 材料取价：按「当天生效」的价目版本覆盖预设单价（价目库来自供货商批量录入）
+const priceInfo = computed(() => applyToPreset(preset.value, loadPriceBook().entries, todayStr()))
+const effPreset = computed(() => priceInfo.value.preset)
+
+const bom = computed(() => (project.value && layout.value ? buildBom(project.value, layout.value, effPreset.value, { acknowledgeThinStroke: ack.value }) : null))
 const sumCheck = computed(() => (bom.value ? assertBomSum(bom.value) : null))
 const compare = computed(() =>
-  project.value && layout.value && bom.value ? compareMaterials(project.value, layout.value, preset.value, bom.value) : []
+  project.value && layout.value && bom.value ? compareMaterials(project.value, layout.value, effPreset.value, bom.value) : []
 )
 
 const grouped = computed(() => {
@@ -120,6 +125,11 @@ function processCard(): void {
               <h2>材料明细与金额</h2>
               <span class="hint">金额单位「分」，Σ 明细 = 合计</span>
             </header>
+            <p class="muted" v-if="priceInfo.applied.length">
+              材料取价：按 {{ todayStr() }} 当天生效价目，本单应用价目库 {{ priceInfo.applied.length }} 条调价（{{
+                priceInfo.applied.map((a) => `${a.label} ${yuan(a.oldCents)}→${yuan(a.newCents)}`).join('；')
+              }}）。
+            </p>
             <table>
               <thead>
                 <tr>

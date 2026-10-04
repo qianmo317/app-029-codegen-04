@@ -40,7 +40,7 @@ export interface QuoteDoc {
   footer: string
 }
 
-export function buildQuoteDoc(project: Project, layout: LayoutResult, bom: BomResult, fontLabel: string): QuoteDoc {
+export function buildQuoteDoc(project: Project, layout: LayoutResult, bom: BomResult, fontLabel: string, priceNote = ''): QuoteDoc {
   const now = new Date()
   const valid = new Date(now.getTime() + 30 * 24 * 3600 * 1000)
   const fmt = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -68,7 +68,8 @@ export function buildQuoteDoc(project: Project, layout: LayoutResult, bom: BomRe
       `面板材料：${bom.panelMaterial.name}（${bom.panelMaterial.desc}）`,
       `亚克力拼版：${bom.nesting.sheetCount} 张 ${bom.sheet.spec}，利用率 ${(bom.nesting.utilization * 100).toFixed(1)}%`,
       `LED：布点长度 ${bom.led.perimeterTotalMm}mm，模组 ${bom.led.modules} 只，额定功率 ${bom.led.ratedW}W，建议电源 ${bom.led.suggestedPsu}`,
-      bom.led.note
+      bom.led.note,
+      priceNote
     ].filter((s) => !!s),
     footer: '本报价基于当前材料单价，有效期 30 天；含材料与加工费，不含安装与运输。'
   }
@@ -90,8 +91,8 @@ function esc(s: string): string {
 }
 
 /** 导出 Excel（.xls，Excel/WPS 可直接打开） */
-export function exportQuoteXls(project: Project, layout: LayoutResult, bom: BomResult, fontLabel: string, compare: CompareRow[]): void {
-  const doc = buildQuoteDoc(project, layout, bom, fontLabel)
+export function exportQuoteXls(project: Project, layout: LayoutResult, bom: BomResult, fontLabel: string, compare: CompareRow[], priceNote = ''): void {
+  const doc = buildQuoteDoc(project, layout, bom, fontLabel, priceNote)
   const table = `
   <table border="1">
     <tr><th colspan="6">${esc(doc.title)}</th></tr>
